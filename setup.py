@@ -8,6 +8,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "baseplate",
+        "redis",
     ],
     cmdclass={
         "build_py": ThriftBuildPyCommand,
