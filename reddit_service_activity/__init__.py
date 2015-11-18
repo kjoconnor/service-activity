@@ -1,6 +1,7 @@
 import logging
 import math
 import random
+import sys
 import time
 
 import redis
@@ -24,6 +25,28 @@ class Handler(ActivityService.ContextIface):
             host=redis_host,
             port=redis_port,
         )
+
+        # Ensure we're using allkeys-lru
+        # This is almost certainly not the place to be doing this - interested
+        # in getting some feedback
+        assert (
+            self.redis.config_get('maxmemory-policy')['maxmemory-policy'] ==
+            'allkeys-lru'
+        )
+
+        # Ensure we're using the right version of redis-server that supports
+        # HLL operations. Same as above, definitely not the place to be doing
+        # this.
+        try:
+            self.redis.execute_command('PFADD version-test testing')
+        except redis.exceptions.ResponseError:
+            logging.error(
+                'Unsupported Redis version ({version}). 2.8.9 or above is '
+                'required for HLL operations.'.format(
+                    version=self.redis.info()['redis_version']
+                )
+            )
+            sys.exit(1)
 
         # This is backwards from spladug's example, is that right?
         self.slice_count, remainder = divmod(
@@ -53,18 +76,15 @@ class Handler(ActivityService.ContextIface):
     def record_activity(self, activity, visitor_id):
         key = self._make_key(activity)
         self.redis.execute_command('PFADD', key, visitor_id)
-        # self.redis.execute_command('INCR', key)
 
     def count_active_visitors(self, activity):
         slice = self._current_slice()
         keys = [
             self._make_key(activity, slice, -i)
-            for i in range(self.slice_count)  # is xrange just range on py3?
+            for i in range(self.slice_count)
         ]
 
         return self.redis.execute_command('PFCOUNT', *keys)
-        # key_vals = self.redis.execute_command('MGET', *keys)
-        # return sum([int(x) for x in key_vals if x is not None])
 
     @staticmethod
     def fuzz_activity(count, threshold):
@@ -76,7 +96,6 @@ class Handler(ActivityService.ContextIface):
         return count + random.randint(0, jitter), True
 
     def is_healthy(self, context):
-        # TODO: check that your service has everything it needs to to function
         try:
             self.redis.ping()
         # Might want to switch to something more specific here
